@@ -1320,7 +1320,7 @@ def wizard_render(mode: str):
     st.divider()
     boton = "➕ Añadir logro" if mode == "add" else "💾 Guardar cambios"
 
-    if st.button(boton, use_container_width=True):
+    if st.button(boton, use_container_width=True, key=f"wizard_submit_{mode}"):
         try:
             if not section_key:
                 raise ValueError("Elige a qué CV pertenece el logro.")
@@ -1460,7 +1460,7 @@ LABEL_DUPLA["name_on_tab_p2"] = "Nombre P2 en tab"
 # ROUTER
 # =========================
 if st.session_state["page"] == "add":
-    if st.button("⬅️ Volver"):
+    if st.button("⬅️ Volver", key="back_add"):
         st.session_state["page"] = "cv"
         st.rerun()
     wizard_render(mode="add")
@@ -1473,7 +1473,7 @@ elif st.session_state["page"] == "edit":
         st.session_state["page"] = "manage"
         st.rerun()
 
-    if st.button("⬅️ Volver"):
+    if st.button("⬅️ Volver", key="back_edit"):
         st.session_state["page"] = "manage"
         st.rerun()
 
