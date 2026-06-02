@@ -52,6 +52,7 @@ FIELD_LABELS = {
     "num_salas": "Número de salas",
     "is_novato_tematico": "¿Novato o temático?",
     "name_on_tab_p2": "Nombre de Persona 2 en tab",
+    "speaker_rank_p2": "Ranking de oradora de Persona 2",
 }
 
 def pretty_field_name(field_key: str) -> str:
@@ -171,32 +172,32 @@ def is_other_tournament(name: str) -> bool:
     name = str(name).strip()
     return name != "" and name not in ALL_KNOWN
 
-def classify_logro(tournament: str, had_break: str, is_novato_tematico: str, num_salas) -> tuple[str, str, str]:
-    """Devuelve (tier_detail, tier_guess, tier_is_guess). tier_detail == tier_guess en este modelo."""
+def classify_logro(tournament: str, had_break: str, is_novato_tematico: str, num_salas) -> tuple[str, str]:
+    """Devuelve (tier, criterio). 'criterio' explica por qué se asignó ese tier."""
     name = str(tournament).strip()
     other = is_other_tournament(name)
 
     # Sin break => siempre E (aunque sea CMUDE/WUDC o un torneo B).
     if str(had_break).strip() == "No":
-        return ("E", "E", "Sí" if other else "No")
+        return ("E", "Sin break")
 
     if name in TIER_A:
-        return ("A", "A", "No")
+        return ("A", name)
     if name in TIER_B:
-        return ("B", "B", "No")
+        return ("B", name)
     if name in TIER_E:
-        return ("E", "E", "No")
+        return ("E", "Novato/temático")
 
     # No A/B: novato/temático (solo para OTRO) => E
     if other and str(is_novato_tematico).strip() == "Sí":
-        return ("E", "E", "Sí")
+        return ("E", "Novato/temático")
 
     # Resto: por número de salas
     n = parse_int_or_none(num_salas)
     t = salas_to_tier(n)
     if t is None:
-        t = "E"
-    return (t, t, "Sí" if other else "No")
+        return ("E", "Salas (sin dato)")
+    return (t, f"Salas: {n}")
 
 # =========================
 # SECCIONES (3 CV de debatiente)
@@ -210,21 +211,23 @@ COMMON_EDIT_COLS = [
 DUPLA_EDIT_COLS = [
     "tournament_pick", "tournament_other", "is_novato_tematico", "num_salas",
     "year", "name_on_tab", "name_on_tab_p2", "tab_link", "format", "team_name",
-    "break", "furthest_round_spoken", "speaker_rank", "team_rank",
+    "break", "furthest_round_spoken", "team_rank", "speaker_rank", "speaker_rank_p2",
 ]
 
 COMMON_SAVE_COLS = [
-    "user_id", "submitted_utc", "tournament", "tier_guess", "tier_detail", "tier_is_guess",
+    "user_id", "submitted_utc", "tournament",
     "year", "name_on_tab", "tab_link", "format", "team_name",
-    "break", "furthest_round_spoken", "speaker_rank", "team_rank",
+    "break", "furthest_round_spoken", "team_rank", "speaker_rank",
     "num_salas", "is_novato_tematico",
+    "tier", "criterio",
 ]
 
 DUPLA_SAVE_COLS = [
-    "user_id", "submitted_utc", "tournament", "tier_guess", "tier_detail", "tier_is_guess",
+    "user_id", "submitted_utc", "tournament",
     "year", "name_on_tab", "name_on_tab_p2", "tab_link", "format", "team_name",
-    "break", "furthest_round_spoken", "speaker_rank", "team_rank",
+    "break", "furthest_round_spoken", "team_rank", "speaker_rank", "speaker_rank_p2",
     "num_salas", "is_novato_tematico",
+    "tier", "criterio",
 ]
 
 SECTIONS = {
@@ -689,9 +692,8 @@ def resolve_tournament(d: dict) -> str:
     return pick
 
 def needs_salas(d: dict) -> bool:
-    """Pedimos salas solo cuando el peso depende de ellas."""
-    if str(d.get("break", SELECT)).strip() != "Sí":
-        return False
+    """Pedimos salas solo cuando el peso depende de ellas (torneos fuera de A/B/E
+    que no sean novatos/temáticos)."""
     t = resolve_tournament(d)
     if t == "":
         return False
@@ -723,6 +725,7 @@ def collect_wizard_values(is_dupla: bool, wk) -> dict:
     }
     if is_dupla:
         d["name_on_tab_p2"] = gv("name_on_tab_p2", "")
+        d["speaker_rank_p2"] = gv("speaker_rank_p2", "")
     return d
 
 def validate_wizard_values(d: dict, is_dupla: bool):
@@ -766,8 +769,14 @@ def validate_wizard_values(d: dict, is_dupla: bool):
         if n is None or n < 1:
             raise ValueError("Falta: número de salas (debe ser un número mayor a 0).")
 
-    if str(d.get("speaker_rank", "")).strip() == "":
-        raise ValueError("Falta: Ranking de oradora.")
+    if is_dupla:
+        if str(d.get("speaker_rank", "")).strip() == "":
+            raise ValueError("Falta: Ranking de oradora de Persona 1.")
+        if str(d.get("speaker_rank_p2", "")).strip() == "":
+            raise ValueError("Falta: Ranking de oradora de Persona 2.")
+    else:
+        if str(d.get("speaker_rank", "")).strip() == "":
+            raise ValueError("Falta: Ranking de oradora.")
     if str(d.get("team_rank", "")).strip() == "":
         raise ValueError("Falta: Ranking de equipo.")
 
@@ -782,6 +791,7 @@ def normalize_wizard(d: dict, is_dupla: bool):
         d["num_salas"] = ""
     if not is_dupla:
         d.pop("name_on_tab_p2", None)
+        d.pop("speaker_rank_p2", None)
     return d
 
 def push_row(section_key: str, d: dict, mode: str, edit_index: int | None = None):
@@ -837,17 +847,16 @@ def build_save_df(edit_df: pd.DataFrame, user_id: str, section_key: str) -> pd.D
         had_break = str(r.get("break", "")).strip()
         novato = str(r.get("is_novato_tematico", "")).strip()
         salas = r.get("num_salas", "")
-        td, tg, tig = classify_logro(tournament, had_break, novato, salas)
+        tier, criterio = classify_logro(tournament, had_break, novato, salas)
 
         row = {c: "" for c in save_cols}
         row["user_id"] = user_id
         row["submitted_utc"] = submitted_utc
         row["tournament"] = tournament
-        row["tier_detail"] = td
-        row["tier_guess"] = tg
-        row["tier_is_guess"] = tig
+        row["tier"] = tier
+        row["criterio"] = criterio
         for c in save_cols:
-            if c in ("user_id", "submitted_utc", "tournament", "tier_detail", "tier_guess", "tier_is_guess"):
+            if c in ("user_id", "submitted_utc", "tournament", "tier", "criterio"):
                 continue
             if c in r.index:
                 row[c] = r[c]
@@ -1290,10 +1299,8 @@ def wizard_render(mode: str):
     if pick == TOURNAMENT_OTHER:
         tb("Si elegiste OTRO, escribe el nombre del torneo", "tournament_other")
 
-    br = sb("¿Hubo break?", "break", YES_NO_OPTIONS)
-
-    if br == "Sí":
-        sb("Ronda más lejana debatida", "furthest_round_spoken", ROUND_SPK_OPTIONS)
+    yr("year")
+    sb("Formato", "format", FORMAT_OPTIONS)
 
     if pick == TOURNAMENT_OTHER:
         sb("¿El torneo era novato o temático?", "is_novato_tematico", YES_NO_OPTIONS)
@@ -1303,7 +1310,7 @@ def wizard_render(mode: str):
     if needs_salas(d_now):
         salas("num_salas")
 
-    yr("year")
+    tb("Link de tab", "tab_link")
 
     if is_dupla:
         tb("Nombre de Persona 1 en tab", "name_on_tab")
@@ -1311,11 +1318,19 @@ def wizard_render(mode: str):
     else:
         tb("Nombre en tab", "name_on_tab")
 
-    tb("Link de tab", "tab_link")
-    sb("Formato", "format", FORMAT_OPTIONS)
     tb("Nombre del equipo", "team_name")
-    tb("Ranking de oradora", "speaker_rank")
+
+    br = sb("¿Hubo break?", "break", YES_NO_OPTIONS)
+    if br == "Sí":
+        sb("Ronda más lejana debatida", "furthest_round_spoken", ROUND_SPK_OPTIONS)
+
     tb("Ranking de equipo", "team_rank")
+
+    if is_dupla:
+        tb("Ranking de oradora de Persona 1", "speaker_rank")
+        tb("Ranking de oradora de Persona 2", "speaker_rank_p2")
+    else:
+        tb("Ranking de oradora", "speaker_rank")
 
     st.divider()
     boton = "➕ Añadir logro" if mode == "add" else "💾 Guardar cambios"
@@ -1452,6 +1467,7 @@ LABEL_COMMON = {
     "break": "¿Hubo break?",
     "furthest_round_spoken": "Ronda más lejana debatida",
     "speaker_rank": "Ranking de oradora",
+    "speaker_rank_p2": "Ranking de oradora P2",
     "team_rank": "Ranking de equipo",
     "num_salas": "N° de salas",
     "is_novato_tematico": "Novato/temático",
@@ -1459,6 +1475,8 @@ LABEL_COMMON = {
 LABEL_DUPLA = dict(LABEL_COMMON)
 LABEL_DUPLA["name_on_tab"] = "Nombre P1 en tab"
 LABEL_DUPLA["name_on_tab_p2"] = "Nombre P2 en tab"
+LABEL_DUPLA["speaker_rank"] = "Rank oradora P1"
+LABEL_DUPLA["speaker_rank_p2"] = "Rank oradora P2"
 
 # =========================
 # ROUTER
