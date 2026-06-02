@@ -313,25 +313,26 @@ def get_ws(title: str):
     return gspread_call(_get)
 
 def ensure_headers(ws, headers: list[str]):
-    key = f"headers_ok__{ws.title}"
-    if st.session_state.get(key, False):
-        return
-
+    # Siempre verificamos la fila 1 (sin caché): así, si la pestaña está vacía,
+    # reponemos los encabezados solos; y si hay datos sin encabezado, avisamos claro
+    # en lugar de corromper el guardado.
     first_row = gspread_call(lambda: ws.row_values(1))
-    if len(first_row) == 0:
+    norm = [h.strip() for h in first_row]
+
+    if len(norm) == 0:
         gspread_call(lambda: ws.insert_row(headers, 1))
-        st.session_state[key] = True
         return
 
-    if [h.strip() for h in first_row] != headers:
-        raise ValueError(
-            f"Los encabezados de '{ws.title}' no coinciden.\n"
-            f"Esperado: {headers}\n"
-            f"Encontrado: {first_row}\n"
-            f"Solución: ajusta la fila 1 o crea una pestaña nueva con esos encabezados."
-        )
+    if norm == headers:
+        return
 
-    st.session_state[key] = True
+    raise ValueError(
+        f"La pestaña '{ws.title}' no tiene los encabezados correctos en la fila 1.\n"
+        f"Esperado: {headers}\n"
+        f"Encontrado: {first_row}\n"
+        f"Solución: borra TODO el contenido de esa pestaña (déjala completamente vacía) "
+        f"y vuelve a guardar; la app reescribirá los encabezados automáticamente."
+    )
 
 def load_user_df(ws, user_id: str) -> pd.DataFrame:
     records = gspread_call(lambda: ws.get_all_records())
