@@ -1353,10 +1353,14 @@ def manage_page():
     st.header("Gestionar / Editar logros")
     st.caption("Puedes editar o eliminar logros. No se puede mover un logro de un CV a otro desde aquí.")
 
+    _mt = st.session_state.get("manage_type", "p1")
+    if _mt not in SECTION_ORDER:
+        _mt = "p1"
+
     typ = st.selectbox(
         "CV",
         options=SECTION_ORDER,
-        index=SECTION_ORDER.index(st.session_state.get("manage_type", "p1")),
+        index=SECTION_ORDER.index(_mt),
         format_func=lambda x: SECTIONS[x]["label"],
         key="manage_type_select"
     )
